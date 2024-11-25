@@ -155,28 +155,63 @@ class MeshHeadModule(nn.Module):
         verts_batch = []
         verts_features_batch = []
         num_pts_max = 0  # 최대 정점 수
+        # 각 배치에서 가장 많은 점을 가진 샘플의 점 개수를 찾습니다.
+        # 이 작업은 후속 단계에서 정점들을 같은 수의 점을 가지도록 패딩하기 위해 필요합니다.
         for b in range(B):
             if verts_list[b].shape[0] > num_pts_max:
-                num_pts_max = verts_list[b].shape[0]
+                num_pts_max = verts_list[b].shape[0]  # 가장 큰 점 개수로 num_pts_max 업데이트
 
+        # 각 배치의 정점 데이터를 동일한 수의 점을 갖도록 패딩합니다.
+        # verts_list[b]의 크기가 num_pts_max보다 작은 경우, 나머지 부분을 0으로 패딩합니다.
         for b in range(B):
+            # 각 배치의 정점 리스트에 0으로 패딩을 추가하여, 모든 배치의 정점 수를 동일하게 만듭니다.
+            # torch.cat: 두 텐서를 이어 붙입니다.
             verts_batch.append(torch.cat([verts_list[b], torch.zeros([num_pts_max - verts_list[b].shape[0], verts_list[b].shape[1]], device=verts_list[b].device)], 0))
-            verts_features_batch.append(torch.cat([features_list[b], torch.zeros([num_pts_max - features_list[b].shape[0], features_list[b].shape[1]], device=features_list[b].device)], 0))
+            # 패딩된 정점들을 verts_batch 리스트에 추가
 
-        verts_batch = torch.stack(verts_batch, 0)
-        verts_features_batch = torch.stack(verts_features_batch, 0)
+            # features_list[b]의 특징 텐서도 동일하게 패딩을 추가하여, 동일한 길이를 갖게 만듭니다.
+            verts_features_batch.append(torch.cat([features_list[b], torch.zeros([num_pts_max - features_list[b].shape[0], features_list[b].shape[1]], device=features_list[b].device)], 0))
+            # 패딩된 특징들을 verts_features_batch 리스트에 추가
+
+        # verts_batch와 verts_features_batch는 이제 배치 크기(B)만큼 스택된 텐서입니다.
+        # 각 배치에 대한 정점 데이터와 해당 특징 데이터를 하나의 텐서로 결합하여, 이후 처리에 용이하게 만듭니다.
+        verts_batch = torch.stack(verts_batch, 0)  # 배치 크기(B)만큼 정점 데이터를 하나로 합침
+        verts_features_batch = torch.stack(verts_features_batch, 0)  # 배치 크기(B)만큼 특징 데이터를 하나로 합침
 
         # 거리 기반으로 표정/자세 가중치 계산
+        # knn_points: verts_batch (정점)과 data['landmarks_3d_neutral'] (중립적인 랜드마크) 간의 거리를 계산합니다.
+        # 이 함수는 각 정점에 대해 가장 가까운 랜드마크를 찾고, 거리(dists)와 그에 해당하는 인덱스(idx)를 반환합니다.
+        # 여기서 '표정 가중치(exp_weights)'와 '자세 가중치(pose_weights)'를 계산하는데 사용됩니다.
         dists, idx, _ = knn_points(verts_batch, data['landmarks_3d_neutral'])
+        
+        # exp_weights: 표정에 대한 가중치 계산
+        # 가까운 랜드마크에서 멀어질수록 표정에 대한 영향을 줄이기 위해, 거리(dists)를 이용하여 표정 가중치를 계산합니다.
+        # dist_threshold_far와 dist_threshold_near는 표정이 영향을 미치는 범위에 대한 임계값입니다.
         exp_weights = torch.clamp((self.dist_threshold_far - dists) / (self.dist_threshold_far - self.dist_threshold_near), 0.0, 1.0)
+        # 위 식을 통해, 가까운 점은 표정 영향을 크게 받게 되고, 먼 점은 표정 영향을 덜 받게 됩니다.
+        
+        # pose_weights: 자세에 대한 가중치 계산
+        # 표정에 대한 가중치와 1에서 표정 가중치를 빼서, 자세에 대한 가중치를 계산합니다.
         pose_weights = 1 - exp_weights
 
-        # 표정과 자세 기반으로 색상 계산
+        # 표정 기반으로 색상 계산
+        # exp_coeff: 표정 계수 (각 표정에 대해 얼굴의 변형을 나타내는 값)
+        # verts_features_batch: 각 정점에 대한 특징 정보
+        # exp_color_input: 표정 계수와 정점 특징을 결합하여 색상 예측을 위한 입력을 만듭니다.
+        # exp_color_input 텐서는 표정 계수를 추가한 후, MLP(다층 퍼셉트론)에 입력하여 색상 값을 예측합니다.
         exp_color_input = torch.cat([verts_features_batch.permute(0, 2, 1), data['exp_coeff'].unsqueeze(-1).repeat(1, 1, num_pts_max)], 1)
+        
+        # exp_weights는 표정에 대한 가중치이므로, 표정이 영향을 주는 정점에 대해 색상을 가중치와 곱하여 계산합니다.
         verts_color_batch = self.exp_color(exp_color_input).permute(0, 2, 1) * exp_weights
 
+        # 자세 기반으로 색상 계산
+        # pose_color_input: 자세와 관련된 임베딩 값과 정점 특징을 결합하여 색상을 예측합니다.
         pose_color_input = torch.cat([verts_features_batch.permute(0, 2, 1), self.pos_embedding(data['pose']).unsqueeze(-1).repeat(1, 1, num_pts_max)], 1)
+        
+        # pose_weights는 자세에 대한 가중치이므로, 자세가 영향을 주는 정점에 대해 색상을 가중치와 곱하여 계산합니다.
+        # 표정에 의해 이미 계산된 verts_color_batch에 자세 색상을 더합니다.
         verts_color_batch = verts_color_batch + self.pose_color(pose_color_input).permute(0, 2, 1) * pose_weights
+
 
         # 데이터에 색상 결과 저장
         data['verts_color_list'] = [verts_color_batch[b, :verts_list[b].shape[0], :] for b in range(B)]
