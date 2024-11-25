@@ -1,4 +1,38 @@
 # Gaussian Head Avatar: Ultra High-fidelity Head Avatar via Dynamic Gaussians
+
+### 환경 구성
+: [Gaussian-Head-Avatar](https://github.com/YuelangX/Gaussian-Head-Avatar)구동을 위한 환경을 구축하고 명시합니다.
+
+<br>
+
+|구성|사양|비고|
+|:--:|:--|:--|
+|OS|Ubuntu 20.04||
+|CPU|AMD EPYC 7V13 64-Core Processor, core(24)||
+|GPU|NVIDIA A100||
+|RAM|220GiB||
+|SSD|프리미엄 SSD LRS 1TB|  - OPS : 5000 <br>  - 처리량(MBps) : 200 <br>  - 디스크 계층 : P30 |
+|CUDA|11.8|12.1 이상의 비추천|
+ 
+ \* 12.1 이상의 CUDA 버전 이용시 겪을 수 있는 일
+  - Pytorch3D 미지원으로 인한 [직접 소스코드 빌드](https://github.com/oMFDOo/OpenSourceIssue/issues/7#issue-2681962776)
+  - 현재(24.11.22)기준 pytorch-cuda는 12.1까지 이용 가능
+  - kaolin의 호환[오류](https://github.com/oMFDOo/OpenSourceIssue/issues/9#issue-2682319760)
+  - kaolin 설치 이후 PyTorch 1.9.0 이후 버전 미지원 코드 사용으로 인한 오류 발생
+등의 이유로 기존 `12.6`버전에서 `11.8`버전으로 낮추게 되었음.
+
+ \* Azure Virtual Machine [Standard NC24ads A100 v4](https://learn.microsoft.com/ko-kr/azure/virtual-machines/sizes/gpu-accelerated/nca100v4-series?tabs=sizebasic#host-specifications)을 이용함
+
+ \* 구동 과정 및 분석 과정은 [프로젝트](https://github.com/users/oMFDOo/projects/7)를 이용해 명시하였음
+
+<br>
+
+이하 원문 README.md 내용
+
+<br>
+
+<hr>
+
 ## [Paper](https://arxiv.org/abs/2312.03029) | [Project Page](https://yuelangx.github.io/gaussianheadavatar/)
 <img src="imgs/teaser.jpg" width="840" height="396"/> 
 
