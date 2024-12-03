@@ -94,21 +94,45 @@ class MeshHeadTrainer():
         for epoch in range(start_epoch, epochs):  # 에포크 반복
             for idx, data in tqdm(enumerate(self.dataloader)):  # 데이터 로드
                 # 데이터를 GPU로 이동
+                # images: 모델에 입력되는 이미지 데이터
+                # masks: 이미지에 대한 마스크 정보
+                # visibles: 가시성 정보 (예: 이미지에서 보이는 부분)
+                # intrinsics: 카메라 내부 파라미터 (내부 행렬 등)
+                # extrinsics: 카메라 외부 파라미터 (위치, 방향 등)
+                # pose: 사람 또는 객체의 포즈 정보
+                # scale: 크기 정보
+                # exp_coeff: 표정 계수 (facial expression coefficients)
+                # landmarks_3d: 3D 랜드마크
+                # exp_id: 표정 식별자
                 to_cuda = ['images', 'masks', 'visibles', 'intrinsics', 'extrinsics', 'pose', 'scale', 'exp_coeff', 'landmarks_3d', 'exp_id']
                 for data_item in to_cuda:
                     data[data_item] = data[data_item].to(device=self.device)
 
-                # 이미지 및 마스크 데이터를 (B, T, H, W, C)로 변환
+                # 이미지 및 마스크 데이터를 원래 (B, C, H, W)의 형태에서 (B, T, H, W, C)로 바꾸는 작업
+                # permute : 텐서의 차원 순서를 변경하는 함수
+                # => 모델이 데이터의 특정 차원을 시간적 차원이나 다른 특성으로 해석할 수 있게 하기 위함
+                # 0: 배치 크기 (B)
+                # 1: 시간 차원 (T) 또는 다른 차원 (e.g., 시퀀스 길이)
+                # 3: 이미지 높이 (H)
+                # 4: 이미지 너비 (W)
+                # 2: 채널 (C)
                 images = data['images'].permute(0, 1, 3, 4, 2)
                 masks = data['masks'].permute(0, 1, 3, 4, 2)
                 visibles = data['visibles'].permute(0, 1, 3, 4, 2)
-                resolution = images.shape[2]  # 이미지 해상도
+                resolution = images.shape[2]  # 이미지 해상도, H 추출
 
                 # 회전(R), 이동(T), 스케일(S) 적용
+                # data['pose']는 3D 포즈 정보를 담고 있는 텐서로, 일반적으로 사람의 위치와 방향을 나타냄
+                # 이 포즈 정보는 보통 6D 벡터로 표현되며, 앞의 3개 값은 rotation, 뒤의 3개 값은 translation을 의미함
+                # data['pose'][:, :3]는 회전 정보만 추출한 것
+                # SO(3) - Special Orthogonal Group 3D는 3D 공간에서의 회전 그룹. 이 변환을 통해서 회전 행렬로 변환해 3D 공간에서 회전 변환을 적용함
+                # => 회전 상태의 객체/카메라 학습을 위함
                 R = so3_exponential_map(data['pose'][:, :3])  # SO(3) 변환 계산
                 T = data['pose'][:, 3:, None]  # 평행 이동
                 S = data['scale'][:, :, None]  # 스케일
-                # 중립 상태 3D 랜드마크 계산
+                # => 일반화 능력 향상과 모델의 강건성(Robustness)을 높이기 위함
+                
+                # 중립 표정(Neutral landmarks) 계산 및 3D 랜드마크 변환
                 landmarks_3d_can = (torch.bmm(R.permute(0, 2, 1), (data['landmarks_3d'].permute(0, 2, 1) - T)) / S).permute(0, 2, 1)
                 landmarks_3d_neutral = self.meshhead.get_landmarks()[None].repeat(data['landmarks_3d'].shape[0], 1, 1)
                 data['landmarks_3d_neutral'] = landmarks_3d_neutral
