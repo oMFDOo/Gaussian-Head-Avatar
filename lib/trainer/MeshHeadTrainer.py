@@ -133,60 +133,89 @@ class MeshHeadTrainer():
                 # => 일반화 능력 향상과 모델의 강건성(Robustness)을 높이기 위함
                 
                 # 중립 표정(Neutral landmarks) 계산 및 3D 랜드마크 변환
+                # landmarks_3d - T: 랜드마크에서 이동 벡터(T)를 빼면, 3D 공간에서 원점에 대한 상대적인 위치를 구해 이동 변환을 적용
+                # R.permute(0, 2, 1): 회전 행렬 R을 사용하여 랜드마크를 회전
+                # torch.bmm는 배치 행렬 곱셈을 수행, 회전 행렬을 랜드마크의 상대 위치에 곱해줌으로써 회전된 랜드마크 위치를 계산
+                # => landmarks_3d_can : 3D 랜드마크가 실제 포즈나 표정 변형에 맞춰 변환된 결과
                 landmarks_3d_can = (torch.bmm(R.permute(0, 2, 1), (data['landmarks_3d'].permute(0, 2, 1) - T)) / S).permute(0, 2, 1)
+                # => andmarks_3d_neutral : 기본 중립 표정에서의 3D 랜드마크
                 landmarks_3d_neutral = self.meshhead.get_landmarks()[None].repeat(data['landmarks_3d'].shape[0], 1, 1)
                 data['landmarks_3d_neutral'] = landmarks_3d_neutral
 
                 # 변형 데이터 생성 및 손실 계산
                 deform_data = {
                     'exp_coeff': data['exp_coeff'],  # 표현 계수
-                    'query_pts': landmarks_3d_neutral  # 쿼리 점
+                    'query_pts': landmarks_3d_neutral  # 쿼리 점 : 중립 표정에서의 3D 랜드마크
                 }
+                # 중립 표정에서의 3D 랜드마크를 표정 변화에 맞게 변형
                 deform_data = self.meshhead.deform(deform_data)  # 메쉬 변형
+                # pred_landmarks_3d_can : 변형된 랜드마크
+                # deformed_pts : 메쉬 변형을 통해 예측된 3D 랜드마크 위치
                 pred_landmarks_3d_can = deform_data['deformed_pts']  # 변형된 점
+                # 랜드마크 loss 추정
                 loss_def = F.mse_loss(pred_landmarks_3d_can, landmarks_3d_can)  # MSE 손실 계산
 
+                # query_sdf를 통해 변형된 랜드마크들이 3D 표면과 얼마나 가까운지 측정
                 deform_data = self.meshhead.query_sdf(deform_data)  # Signed Distance Field(SDF) 쿼리
                 sdf_landmarks_3d = deform_data['sdf']
+                # SDF 값이 0에 가까울수록 랜드마크가 객체의 표면에 가까운 것이므로, 손실 값이 작은 값
                 loss_lmk = torch.abs(sdf_landmarks_3d[:, :, 0]).mean()  # 랜드마크 손실 계산
 
                 # 메쉬 재구성 및 렌더링
-                data = self.meshhead.reconstruct(data)
+                # 표현 계수(exp_coeff), 표정 변화, 포즈 변화 등의 정보들을 바탕으로 3D 메쉬 모델을 다시 생성
+                data = self.meshhead.reconstruct(data) 
+                # 카메라 모델이 데이터를 사용해 2D 이미지를 생성
                 data = self.camera.render(data, resolution)
+                ####################################### 최종 결과물 #######################################
+                # ****모델이 생성한 최종 이미지****
                 render_images = data['render_images']
+                # 각 픽셀에 대해 확률적인 값을 가진 소프트마스크로, 각 픽셀이 얼굴/객체의 일부일 확률을 표현
                 render_soft_masks = data['render_soft_masks']
+                # 표정 변화에 따른 3D 메쉬 변형을 나타내는 값
                 exp_deform = data['exp_deform']
+                # 얼굴이나 객체의 포즈 변화에 따른 3D 메쉬 변형을 나타내는 값
                 pose_deform = data['pose_deform']
+                # 3D 메쉬의 각 정점 좌표를 나열한 리스트로, 각 정점은 3D 공간에서 객체의 형태를 정의
                 verts_list = data['verts_list']
+                # 3D 메쉬의 면 리스트
                 faces_list = data['faces_list']
 
-                # 손실 함수 계산
-                loss_rgb = F.l1_loss(render_images[:, :, :, :, 0:3] * visibles, images * visibles)  # RGB 손실
+                ####################################### 손실 함수 계산 #######################################
+                # RGB 손실
+                # [:, :, :, :, 0:3] : rgb 3개 채널에 대해서만 예측 이미지 render_images와 실제 이미지 loss 추정
+                # visibles : 보이는 영역을 나타낸 마스크, 객체가 가려져 있거나 일부가 잘리면 해당 영역은 0, 나머지는 1로 설정
+                loss_rgb = F.l1_loss(render_images[:, :, :, :, 0:3] * visibles, images * visibles)  
+                # 실루엣 손실
+                # Intersection over Union (IoU) : 두 마스크 간의 겹치는 영역의 비율을 측정하는 지표
                 loss_sil = kaolin.metrics.render.mask_iou(
                     (render_soft_masks * visibles[:, :, :, :, 0]).view(-1, resolution, resolution), 
                     (masks * visibles).squeeze().view(-1, resolution, resolution)
-                )  # 실루엣 손실
-                loss_offset = (exp_deform ** 2).sum(-1).mean() + (pose_deform ** 2).sum(-1).mean()  # 변형 오프셋 손실
+                ) 
+                # 변형 오프셋 손실
+                # 표정과 포즈의 변형 오프셋에 대한 합산 손실, 표정과 포즈에 따른 과도한 변형을 최소화하기 위함
+                loss_offset = (exp_deform ** 2).sum(-1).mean() + (pose_deform ** 2).sum(-1).mean()  
 
                 # 라플라스 정규화 손실
+                # 모든 배치에 대해 라플라스 정규화 손실을 합산
                 loss_lap = 0.0
                 for b in range(len(verts_list)):
                     loss_lap += laplace_regularizer_const(verts_list[b], faces_list[b])
 
                 # 총 손실 계산
+                
                 loss = (
-                    loss_rgb * 1e-1 + 
-                    loss_sil * 1e-1 + 
-                    loss_def * 1e0 + 
-                    loss_offset * 1e-2 + 
-                    loss_lmk * 1e-1 + 
-                    loss_lap * 1e2
+                    loss_rgb * 1e-1 +  # RGB 손실에 가중치 0.1 적용
+                    loss_sil * 1e-1 +  # 실루엣 손실에 가중치 0.1 적용
+                    loss_def * 1e0 +   # 변형 손실에 가중치 1 적용 (가장 중요한 손실)
+                    loss_offset * 1e-2 +  # 오프셋 손실에 가중치 0.01 적용
+                    loss_lmk * 1e-1 +  # 랜드마크 손실에 가중치 0.1 적용
+                    loss_lap * 1e2     # 라플라시안 손실에 가중치 100 적용 (가장 중요한 손실)
                 )
 
                 # 역전파 및 가중치 업데이트
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+                self.optimizer.zero_grad()  # 옵티마이저의 기울기 초기화 (기존 기울기 값이 남아있는 것을 방지)
+                loss.backward()  # 손실 함수에 대해 역전파 수행 (기울기 계산)
+                self.optimizer.step()  # 옵티마이저를 사용하여 가중치 업데이트
 
                 # 로그 저장
                 log = {
