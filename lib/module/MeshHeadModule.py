@@ -212,11 +212,86 @@ class MeshHeadModule(nn.Module):
         # 표정에 의해 이미 계산된 verts_color_batch에 자세 색상을 더합니다.
         verts_color_batch = verts_color_batch + self.pose_color(pose_color_input).permute(0, 2, 1) * pose_weights
 
+        exp_deform_input = torch.cat([self.pos_embedding(verts_batch).permute(0, 2, 1), data['exp_coeff'].unsqueeze(-1).repeat(1, 1, num_pts_max)], 1)
+        exp_deform = self.exp_deform(exp_deform_input).permute(0, 2, 1)
+        verts_batch = verts_batch + exp_deform * exp_weights * self.deform_scale
 
+        pose_deform_input = torch.cat([self.pos_embedding(verts_batch).permute(0, 2, 1), self.pos_embedding(data['pose']).unsqueeze(-1).repeat(1, 1, num_pts_max)], 1)
+        pose_deform = self.pose_deform(pose_deform_input).permute(0, 2, 1)
+        verts_batch = verts_batch + pose_deform * pose_weights * self.deform_scale
+
+        if 'pose' in data:
+            R = so3_exponential_map(data['pose'][:, :3])
+            T = data['pose'][:, None, 3:]
+            S = data['scale'][:, :, None]
+            verts_batch = torch.bmm(verts_batch * S, R.permute(0, 2, 1)) + T
+
+        data['exp_deform'] = exp_deform
+        data['pose_deform'] = pose_deform
+        data['verts_list'] = [verts_batch[b, :verts_list[b].shape[0], :] for b in range(B)]
+        
         # 데이터에 색상 결과 저장
         data['verts_color_list'] = [verts_color_batch[b, :verts_list[b].shape[0], :] for b in range(B)]
         return data
 
+
+    def reconstruct_neutral(self):
+        query_pts = self.tet_verts.unsqueeze(0)
+        geo_input = self.pos_embedding(query_pts).permute(0, 2, 1)
+
+        pred = self.geometry(geo_input)
+
+        sdf, deform, features = pred[:, :1, :], pred[:, 1:4, :], pred[:, 4:, :]
+        sdf = sdf.permute(0, 2, 1)
+        features = features.permute(0, 2, 1)
+        verts_deformed = (query_pts + torch.tanh(deform.permute(0, 2, 1)) / self.grid_res)
+        verts_list, features_list, faces_list = marching_tetrahedra(verts_deformed, features, self.tets, sdf)
+
+        data = {}
+        data['verts'] = verts_list[0]
+        data['faces'] = faces_list[0]
+        data['verts_feature'] = features_list[0]
+        return data
+    
+    def query_sdf(self, data):
+        query_pts = data['query_pts']
+
+        geo_input = self.pos_embedding(query_pts).permute(0, 2, 1)
+
+        pred = self.geometry(geo_input)
+        sdf = pred[:, :1, :]
+        sdf = sdf.permute(0, 2, 1)
+
+        data['sdf'] = sdf
+        return data
+    
+    def deform(self, data):
+        exp_coeff = data['exp_coeff']
+        query_pts = data['query_pts']
+        
+        geo_input = self.pos_embedding(query_pts).permute(0, 2, 1)
+
+        pred = self.geometry(geo_input)
+        sdf, deform = pred[:, :1, :], pred[:, 1:4, :]
+        query_pts = (query_pts + torch.tanh(deform).permute(0, 2, 1) / self.grid_res)
+
+        exp_deform_input = torch.cat([self.pos_embedding(query_pts).permute(0, 2, 1), exp_coeff.unsqueeze(-1).repeat(1, 1, query_pts.shape[1])], 1)
+        exp_deform = self.exp_deform(exp_deform_input).permute(0, 2, 1)
+
+        deformed_pts = query_pts + exp_deform * self.deform_scale
+
+        data['deformed_pts'] = deformed_pts
+        return data
+    
+    def in_bbox(self, verts, bbox):
+        is_in_bbox = (verts[:, :, 0] > bbox[0][0]) & \
+                     (verts[:, :, 1] > bbox[1][0]) & \
+                     (verts[:, :, 2] > bbox[2][0]) & \
+                     (verts[:, :, 0] < bbox[0][1]) & \
+                     (verts[:, :, 1] < bbox[1][1]) & \
+                     (verts[:, :, 2] < bbox[2][1])
+        return is_in_bbox
+    
     def pre_train_sphere(self, iter, device):
         """
         MLP를 구체(sphere)를 기준으로 사전 학습합니다.

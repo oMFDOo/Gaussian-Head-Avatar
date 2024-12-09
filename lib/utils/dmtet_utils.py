@@ -119,6 +119,48 @@ def _unbatched_marching_tetrahedra(vertices, features, tets, sdf, return_tet_idx
 
 
 def marching_tetrahedra(vertices, features, tets, sdf, return_tet_idx=False):
+    r"""테트라헤드론 그리드에 인코딩된 이산 Signed Distance Field (SDF)를 Marching Tetrahedra 알고리즘을 사용하여 삼각형 메시로 변환합니다. 
+    출력된 표면은 입력된 정점 위치와 SDF 값에 대해 미분 가능하며, 
+    더 자세한 내용과 예시 사용법은 'Deep Marching Tetrahedra: a Hybrid Representation for High-Resolution 3D Shape Synthesis' 논문(NeurIPS 2021)에서 확인할 수 있습니다.
+
+    Args:
+        vertices (torch.tensor): 테트라헤드론 메시의 배치된 정점들로, 형태는 :math:`(\text{batch_size}, \text{num_vertices}, 3)`입니다.
+        tets (torch.tensor): 배치되지 않은 테트라헤드론 메시의 토폴로지로, 형태는 :math:`(\text{num_tetrahedrons}, 4)`입니다.
+        sdf (torch.tensor): 각 정점의 SDF 값을 지정하는 배치된 SDF로, 형태는 :math:`(\text{batch_size}, \text{num_vertices})`입니다.
+        return_tet_idx (optional, bool): True일 경우, 각 면이 추출된 테트라헤드론의 인덱스를 반환합니다. 기본값은 False입니다.
+
+    Returns:
+        (list[torch.Tensor], list[torch.LongTensor], (optional) list[torch.LongTensor]): 
+
+            - 각 테트라헤드론 그리드에서 변환된 메시의 정점 목록.
+            - 각 테트라헤드론 그리드에서 변환된 메시의 면 목록.
+            - 각 면이 추출된 테트라헤드론의 인덱스 목록(옵션).
+
+    예시:
+        >>> vertices = torch.tensor([[[0, 0, 0],
+        ...               [1, 0, 0],
+        ...               [0, 1, 0],
+        ...               [0, 0, 1]]], dtype=torch.float)
+        >>> tets = torch.tensor([[0, 1, 2, 3]], dtype=torch.long)
+        >>> sdf = torch.tensor([[-1., -1., 0.5, 0.5]], dtype=torch.float)
+        >>> verts_list, faces_list, tet_idx_list = marching_tetrahedra(vertices, tets, sdf, True)
+        >>> verts_list[0]
+        tensor([[0.0000, 0.6667, 0.0000],
+                [0.0000, 0.0000, 0.6667],
+                [0.3333, 0.6667, 0.0000],
+                [0.3333, 0.0000, 0.6667]])
+        >>> faces_list[0]
+        tensor([[3, 0, 1],
+                [3, 2, 0]])
+        >>> tet_idx_list[0]
+        tensor([0, 0])
+
+    .. _테트라헤드론 셀을 사용한 등가값 표면의 삼각화 효율적인 방법:
+        https://search.ieice.org/bin/summary.php?id=e74-d_1_214
+
+    .. _Deep Marching Tetrahedra: 고해상도 3D 형태 합성을 위한 하이브리드 표현:
+        https://arxiv.org/abs/2111.04276
+    """
     """
     Marching Tetrahedra 알고리즘 구현.
 

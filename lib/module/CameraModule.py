@@ -179,6 +179,10 @@ class CameraModule():
 
         # 화면 좌표 초기화 (그라디언트를 계산하기 위해 필요)
         screenspace_points = torch.zeros_like(xyz, dtype=xyz.dtype, requires_grad=True, device=xyz.device)
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
 
         render_images = []
         radii = []
@@ -206,7 +210,10 @@ class CameraModule():
 
             # Rasterizer 객체 생성
             rasterizer = GaussianRasterizer(raster_settings=raster_settings)
-
+            
+            means3D = xyz[b]
+            means2D = screenspace_points[b]
+            
             # 3D 및 화면 좌표를 사용해 Gaussian Rasterization 수행
             render_images_b, radii_b = rasterizer(
                 means3D=xyz[b],
