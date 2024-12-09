@@ -50,6 +50,27 @@ pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.co
 pip install kaolin==0.13.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-1.12.0_cu113.html
 ```
 * Install diff-gaussian-rasterization and simple_knn from [gaussian-splatting](https://github.com/graphdeco-inria/gaussian-splatting). Note, for rendering 32-channel images, please modify "NUM_CHANNELS 3" to "NUM_CHANNELS 32" in "diff-gaussian-rasterization/cuda_rasterizer/config.h".
+
+* 위에 제시한 [diff-gaussian-rasterization](https://github.com/graphdeco-inria/diff-gaussian-rasterization/tree/9c5c2028f6fbee2be239bc4c9421ff894fe4fbe0)의 경로는 현재(2024.12.09)까지 유효한 경로로 나오지만 `simple-knn`에 대해서는 경로가 유효하지 않다. 대안으로 제시하여 구동까지 올바르게 확인된 [simple-knn](https://github.com/DSaurus/simple-knn/tree/main)의 경로는 이것이다. 따라서 제안하는 과정은 다음과 같다.
+```
+# 제안 다운로드 과정
+git clone https://github.com/graphdeco-inria/diff-gaussian-rasterization.git
+cd diff-gaussian-rasterization/cuda_rasterizer
+vi config.h
+### 이곳에서 아래처럼 선언된 값을
+### #define NUM_CHANNELS 3 // Default 3, RGB
+### 이렇게 바꾼다.
+### #define NUM_CHANNELS 32 // Default 3, RGB
+cd ../
+# pip install 이전 아래가 필요할 수 있다.
+sudo apt-get install build-essential
+sudo apt-get install libglm-dev
+pip install .
+cd ../
+git clone https://github.com/DSaurus/simple-knn.git
+cd simple-knn
+pip install .
+```
 ```
 cd path/to/gaussian-splatting
 # Modify "submodules/diff-gaussian-rasterization/cuda_rasterizer/config.h"
